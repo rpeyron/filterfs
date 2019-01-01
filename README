@@ -1,3 +1,6 @@
+24/04/2016 : patch to add directory filtering by Remi Peyronnet (see filterfs --help) and added bootstrap and missing compilation files
+
+
 ========
 FilterFS
 ========
@@ -86,6 +89,10 @@ The FilterFS project uses Git for revision control. You can obtain the full
 repository with::
 
   git clone git://filterfs.git.sourceforge.net/gitroot/filterfs
+  
+  ./bootstrap
+  make
+  make install
 
 FilterFS is written in plain C and does not use any third-party libraries except
 FUSE:

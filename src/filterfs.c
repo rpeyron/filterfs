@@ -9,6 +9,9 @@
   See the file COPYING.
 
   gcc -Wall `pkg-config fuse --cflags --libs` filterfs.c -o filterfs
+  
+  24/04/2016 : patch to add directory filtering by Remi Peyronnet
+  
 */
 
 #define FUSE_USE_VERSION 26
@@ -39,11 +42,12 @@
 #include <sys/xattr.h>
 #endif
 
-#define ffs_debug(f, ...) syslog(LOG_DEBUG, f, ## __VA_ARGS__)
+#define ffs_debug(f, ...) if (debug) syslog(LOG_DEBUG, f, ## __VA_ARGS__)
 #define ffs_info(f, ...) syslog(LOG_INFO, f, ## __VA_ARGS__)
 #define ffs_error(f, ...) syslog(LOG_ERR, f, ## __VA_ARGS__)
 
-int default_exclude = 0;
+int default_exclude = 1;
+int dirs = 0;
 int debug = 0;
 char *srcdir = NULL;
 
@@ -52,6 +56,8 @@ enum {
     KEY_INCLUDE,
     KEY_DEFAULT_EXCLUDE,
     KEY_DEFAULT_INCLUDE,
+    KEY_DIRS,
+    KEY_NO_DIRS,
     KEY_HELP,
     KEY_VERSION,
     KEY_KEEP_OPT
@@ -66,9 +72,14 @@ static struct fuse_opt ffs_opts[] = {
     FUSE_OPT_KEY("include=%s",              KEY_INCLUDE),
     FUSE_OPT_KEY("--default-exclude",       KEY_DEFAULT_EXCLUDE),
     FUSE_OPT_KEY("--default-include",       KEY_DEFAULT_INCLUDE),
+    FUSE_OPT_KEY("default-exclude",       KEY_DEFAULT_EXCLUDE),
+    FUSE_OPT_KEY("default-include",       KEY_DEFAULT_INCLUDE),
     FUSE_OPT_KEY("-d",                      KEY_KEEP_OPT),
     FUSE_OPT_KEY("--debug",                 KEY_KEEP_OPT),
-
+    FUSE_OPT_KEY("--dirs",       KEY_DIRS),
+    FUSE_OPT_KEY("--no-dirs",       KEY_NO_DIRS),
+    FUSE_OPT_KEY("dirs",       KEY_DIRS),
+    FUSE_OPT_KEY("no-dirs",       KEY_NO_DIRS),
     FUSE_OPT_KEY("-h",            KEY_HELP),
     FUSE_OPT_KEY("--help",        KEY_HELP),
     FUSE_OPT_KEY("-V",            KEY_VERSION),
@@ -135,6 +146,20 @@ static int append_rules(char *patterns, int exclude)
     return 0;
 }
 
+
+/**
+ * Checks if str1 begins with str2. If so, returns a pointer to the end of
+ * the match. Otherwise, returns null.
+ */
+static const char *str_consume(const char *str1, const char *str2)
+{
+    if (strncmp(str1, str2, strlen(str2)) == 0) {
+        return str1 + strlen(str2);
+    }
+
+    return 0;
+}
+
 /**
  * Checks whether the provided path should be excluded.
  */
@@ -143,9 +168,12 @@ static int exclude_path(const char *path)
     struct stat st;
     lstat(path, &st);
 
-    /* directories must not be filtered (currently) */
+    /* test if directory must be filtered : check if dirs must be filtered, and that it is not root */
     if (S_ISDIR(st.st_mode))
-        return 0;
+	if (!dirs)
+		return 0;
+	else if (strcmp(str_consume(path, srcdir),"/") == 0)
+		return 0;
 
     /* we only need the last part of the path */
     char *path_tail = strrchr(path, '/');
@@ -153,6 +181,20 @@ static int exclude_path(const char *path)
         *path_tail = *path;
     else
         path_tail++;
+    
+    /* if dir and '.', exclude main path */
+    if ( (strcmp(path_tail,".") == 0)  || (strcmp(path_tail,"..") == 0) )
+    {
+	    int ret;
+	    char * folder;
+	    folder=strdup(path);
+	    *(folder + strlen(path)-strlen(path_tail)) = 0;
+	    if (folder) {
+		ret = exclude_path(folder);
+		free(folder);
+		return ret;
+	    }
+    }
 
     struct rule *curr_rule = chain.head;
 
@@ -166,18 +208,6 @@ static int exclude_path(const char *path)
     return default_exclude;
 }
 
-/**
- * Checks if str1 begins with str2. If so, returns a pointer to the end of
- * the match. Otherwise, returns null.
- */
-static const char *str_consume(const char *str1, char *str2)
-{
-    if (strncmp(str1, str2, strlen(str2)) == 0) {
-        return str1 + strlen(str2);
-    }
-
-    return 0;
-}
 
 /*
  * FUSE callback operations
@@ -894,6 +924,14 @@ static int ffs_opt_proc(void *data, const char *arg, int key,
             default_exclude = 0;
             return 0;
 
+        case KEY_DIRS:
+            dirs = 1;
+            return 0;
+
+        case KEY_NO_DIRS:
+            dirs = 0;
+            return 0;
+
         case KEY_HELP:
             usage(outargs->argv[0]);
             fuse_opt_add_arg(outargs, "-ho");
@@ -915,6 +953,7 @@ static int ffs_opt_proc(void *data, const char *arg, int key,
 
 int main(int argc, char *argv[])
 {
+	
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
     if (fuse_opt_parse(&args, NULL, ffs_opts, ffs_opt_proc)) {

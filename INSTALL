@@ -3,6 +3,7 @@ Installation
 
 To build and install, run:
 
+./bootstrap
 ./configure
 make
 make install
